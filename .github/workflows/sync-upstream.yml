@@ -1,0 +1,70 @@
+name: Sync main with upstream
+
+# Keeps `main` current with XTLS/Xray-core:main by MERGING upstream into it
+# (same model as GitHub's "Sync fork" button — no history rewrite, no force
+# push, so the two never fight). Merges only when upstream moved; aborts
+# loudly on conflict or build failure so it never pushes a broken main.
+# Release tags live on their own commits off main and are untouched.
+
+on:
+  schedule:
+    - cron: '17 4 * * *'   # daily, 04:17 UTC
+  workflow_dispatch:        # allow manual run
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout main (full history)
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Configure git identity
+        run: |
+          git config user.name  "fedarisha-sync-bot"
+          git config user.email "actions@users.noreply.github.com"
+
+      - name: Fetch upstream
+        run: |
+          git remote add upstream https://github.com/XTLS/Xray-core.git
+          git fetch --no-tags upstream main
+
+      - name: Merge upstream/main into main
+        id: merge
+        run: |
+          if git merge-base --is-ancestor upstream/main HEAD; then
+            echo "main already contains upstream/main tip — nothing to do."
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "Merging upstream/main ($(git rev-parse --short upstream/main))..."
+          if ! git merge --no-edit upstream/main; then
+            git merge --abort || true
+            echo "::error::Merge of upstream/main hit conflicts — manual sync required."
+            exit 1
+          fi
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Go
+        if: steps.merge.outputs.changed == 'true'
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          check-latest: true
+
+      - name: Build check (do not push a broken main)
+        if: steps.merge.outputs.changed == 'true'
+        run: go build ./...
+
+      - name: Push synced main
+        if: steps.merge.outputs.changed == 'true'
+        run: git push origin main
