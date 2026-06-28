@@ -27,13 +27,12 @@ jobs:
         with:
           ref: main
           fetch-depth: 0
-          # Push with a PAT that has `workflow` scope, NOT the default GITHUB_TOKEN.
-          # The built-in App token is forbidden from pushing changes to
-          # .github/workflows/* files, which upstream edits regularly. Deploy keys
-          # are disabled org-wide on Fedarisha, so a workflow-scoped PAT in the
-          # SYNC_TOKEN secret is the mechanism. Falls back to GITHUB_TOKEN if unset
-          # (which still works as long as the merge touches no workflow files).
-          token: ${{ secrets.SYNC_TOKEN || github.token }}
+          # Push via a repo-scoped write deploy key (SSH), NOT the default
+          # GITHUB_TOKEN. The built-in App token is forbidden from pushing changes
+          # to .github/workflows/* files, which upstream edits regularly; a deploy
+          # key is exempt and is scoped to this repo only (no account-wide token,
+          # no expiry). Requires deploy keys to be enabled on the Fedarisha org.
+          ssh-key: ${{ secrets.SYNC_SSH_KEY }}
           persist-credentials: true
 
       - name: Configure git identity
