@@ -15,6 +15,7 @@ import (
 	"github.com/hashicorp/yamux"
 	fedstorage "github.com/xtls/xray-core/proxy/fedarisha/storage"
 	fedlocal "github.com/xtls/xray-core/proxy/fedarisha/storage/local"
+	fedmulti "github.com/xtls/xray-core/proxy/fedarisha/storage/multi"
 	feds3 "github.com/xtls/xray-core/proxy/fedarisha/storage/s3"
 	fedtransport "github.com/xtls/xray-core/proxy/fedarisha/transport"
 
@@ -114,6 +115,12 @@ func buildStorage(ctx context.Context, config *StorageConfig) (fedstorage.Storag
 			return nil, err
 		}
 		return store, nil
+	case "multi_s3":
+		stores, err := buildMultiS3(ctx, config)
+		if err != nil {
+			return nil, err
+		}
+		return fedmulti.New(stores), nil
 	case "local":
 		if config.GetLocalDir() == "" {
 			return nil, fmt.Errorf("localDir is empty")
@@ -126,6 +133,56 @@ func buildStorage(ctx context.Context, config *StorageConfig) (fedstorage.Storag
 	default:
 		return nil, fmt.Errorf("unsupported storage type %q", storageType)
 	}
+}
+
+func buildMultiS3(ctx context.Context, config *StorageConfig) ([]fedstorage.Storage, error) {
+	buckets := splitCSV(config.GetBucket())
+	if len(buckets) < 2 {
+		return nil, fmt.Errorf("multi_s3 requires at least two buckets")
+	}
+	endpoints := splitCSV(config.GetEndpoint())
+	regions := splitCSV(config.GetRegion())
+	prefixes := splitCSV(config.GetPrefix())
+	accessKeys := splitCSV(config.GetAccessKey())
+	secretKeys := splitCSV(config.GetSecretKey())
+	stores := make([]fedstorage.Storage, 0, len(buckets))
+	for i, bucket := range buckets {
+		store := feds3.New(feds3.Config{
+			Bucket:    bucket,
+			Prefix:    pickCSV(prefixes, i),
+			Region:    pickCSV(regions, i),
+			Endpoint:  pickCSV(endpoints, i),
+			AccessKey: pickCSV(accessKeys, i),
+			SecretKey: pickCSV(secretKeys, i),
+		})
+		if err := store.Init(ctx); err != nil {
+			return nil, fmt.Errorf("multi_s3 bucket %q: %w", bucket, err)
+		}
+		stores = append(stores, store)
+	}
+	return stores, nil
+}
+
+func splitCSV(v string) []string {
+	parts := strings.Split(v, ",")
+	out := parts[:0]
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+func pickCSV(values []string, i int) string {
+	if len(values) == 0 {
+		return ""
+	}
+	if i < len(values) {
+		return values[i]
+	}
+	return values[0]
 }
 
 func yamuxSessionConfig() *yamux.Config {
