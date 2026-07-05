@@ -48,7 +48,7 @@ const (
 	// DefaultIdleTimeout closes a session after this long with no data.
 	DefaultIdleTimeout = 300 * time.Second
 	// DefaultMaxFileSize limits data per file (bytes).
-	DefaultMaxFileSize = 2 * 1024 * 1024 // 2 MB
+	DefaultMaxFileSize = 4 * 1024 * 1024 // 4 MB
 	// CleanupAge — files older than this are deleted during garbage collection.
 	CleanupAge = 30 * time.Second
 )

@@ -55,7 +55,11 @@ func newHTTPClient(maxConns int) *http.Client {
 			MaxIdleConnsPerHost:   maxConns,
 			MaxConnsPerHost:       maxConns,
 			IdleConnTimeout:       120 * time.Second,
-			ResponseHeaderTimeout: 15 * time.Second,
+			ResponseHeaderTimeout: 30 * time.Second,
+			TLSHandshakeTimeout:   10 * time.Second,
+			ExpectContinueTimeout: 1 * time.Second,
+			ForceAttemptHTTP2:     true,
+			DisableCompression:    true,
 			DialContext: (&net.Dialer{
 				Timeout:   10 * time.Second,
 				KeepAlive: 30 * time.Second,
@@ -94,8 +98,8 @@ func New(cfg Config) *S3Store {
 	// DELETEs of consumed files; write pool is dedicated to the PUT workers.
 	return &S3Store{
 		cfg:         cfg,
-		readClient:  newClient(newHTTPClient(192)),
-		writeClient: newClient(newHTTPClient(96)),
+		readClient:  newClient(newHTTPClient(256)),
+		writeClient: newClient(newHTTPClient(128)),
 	}
 }
 

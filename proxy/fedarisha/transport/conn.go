@@ -9,6 +9,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"os"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -117,7 +118,7 @@ type ConnConfig struct {
 	WebhookHub    *WebhookHub // optional — enables event-driven polling via S3 webhooks
 }
 
-const uploadWorkers = 48
+const uploadWorkers = 64
 
 // Hedged PUTs. A single slow PUT (gpucloud throttling a connection under load)
 // stalls one file; because the reader consumes strictly in order, a stuck file
@@ -140,9 +141,9 @@ const uploadWorkers = 48
 // it's clearly stuck, past uploadHedgeLarge.
 const (
 	uploadHedgeSmall   = 600 * time.Millisecond
-	uploadHedgeLarge   = 6 * time.Second
+	uploadHedgeLarge   = 8 * time.Second
 	uploadHedgeSizeCut = 256 * 1024 // bytes; files at/above use the large delay
-	uploadTimeout      = 20 * time.Second
+	uploadTimeout      = 30 * time.Second
 	uploadAttempts     = 3
 )
 
@@ -156,9 +157,30 @@ const (
 	// Read GETs in flight cap. With List-confirmed fetches there are no wasted
 	// 404s, so this can be generous to keep many multiplexed streams fed under a
 	// parallel download flood without one stream starving the others. Bounded
-	// below the read pool's 96 connections, leaving headroom for List calls.
-	maxReadConcurrency = 64
+	// below the read pool, leaving headroom for List/Delete calls.
+	maxReadConcurrency = 96
 )
+
+const (
+	// Compression helps for small text/control payloads, but bulk proxy traffic
+	// is usually TLS, video, archives, or otherwise already compressed. Running
+	// flate over multi-megabyte chunks burns CPU on both Android and the node and
+	// delays the S3 PUT/GET pipeline for little gain, so large chunks stay raw.
+	maxCompressInput = 64 * 1024
+)
+
+func debugf(format string, v ...interface{}) {
+	if fedarishaDebug.Load() {
+		log.Printf(format, v...)
+	}
+}
+
+var fedarishaDebug atomic.Bool
+
+func init() {
+	v := os.Getenv("FEDARISHA_DEBUG")
+	fedarishaDebug.Store(v == "1" || v == "true" || v == "TRUE")
+}
 
 // holeTimeout bounds how long a missing readSeq file (with later files already
 // present) is tolerated before the session is treated as wedged and re-dialed.
@@ -221,7 +243,7 @@ func NewConn(cfg ConnConfig) *Conn {
 		lastRecv:      time.Now(),
 		closed:        make(chan struct{}),
 		flushNow:      make(chan struct{}, 1),
-		uploadQueue:   make(chan uploadJob, 128),
+		uploadQueue:   make(chan uploadJob, 256),
 		localAddr:     fedarishaAddr{tag: "fedarisha-local"},
 		remoteAddr:    fedarishaAddr{tag: "fedarisha:" + cfg.SessionID[:8]},
 		prefetchCache: make(map[uint64][]byte),
@@ -358,6 +380,13 @@ const (
 )
 
 func encodePayload(data []byte) []byte {
+	if len(data) > maxCompressInput {
+		out := make([]byte, 1+len(data))
+		out[0] = headerRaw
+		copy(out[1:], data)
+		return out
+	}
+
 	var buf bytes.Buffer
 	w, _ := flate.NewWriter(&buf, flate.BestSpeed)
 	w.Write(data)
@@ -426,7 +455,7 @@ func (c *Conn) uploadWorker() {
 			c.s3PutErrors.Add(1)
 			log.Printf("[fedarisha:%s] upload ERR %s (%d B, %v): %v", c.sessionID[:8], job.path, len(job.data), dt, err)
 		} else {
-			log.Printf("[fedarisha:%s] upload %s (%d B, %v)", c.sessionID[:8], job.path, len(job.data), dt)
+			debugf("[fedarisha:%s] upload %s (%d B, %v)", c.sessionID[:8], job.path, len(job.data), dt)
 		}
 	}
 }
@@ -649,7 +678,7 @@ func (c *Conn) pollLoop() {
 
 		if n > 0 {
 			if emptyPolls > 0 {
-				log.Printf("[fedarisha:%s] poll: %d empty polls before data arrived", c.sessionID[:8], emptyPolls)
+				debugf("[fedarisha:%s] poll: %d empty polls before data arrived", c.sessionID[:8], emptyPolls)
 				emptyPolls = 0
 			}
 			c.lastRecvActive.Store(time.Now().UnixNano())
@@ -891,7 +920,7 @@ func (c *Conn) fetchNext() int {
 	}
 
 	if consumed > 0 {
-		log.Printf("[fedarisha:%s] fetchNext: got %d files (%d present), total %v", c.sessionID[:8], consumed, len(present), time.Since(fetchStart))
+		debugf("[fedarisha:%s] fetchNext: got %d files (%d present), total %v", c.sessionID[:8], consumed, len(present), time.Since(fetchStart))
 	}
 
 	// Hole watchdog: later files exist but we consumed nothing — readSeq is still
