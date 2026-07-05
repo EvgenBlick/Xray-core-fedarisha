@@ -45,6 +45,14 @@ jobs:
           git remote add upstream https://github.com/XTLS/Xray-core.git
           git fetch --no-tags upstream main
 
+      # Go is set up BEFORE the merge because the merge step may need
+      # `go mod tidy` to auto-resolve go.mod/go.sum conflicts (see below).
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          check-latest: true
+
       - name: Merge upstream/main into main
         id: merge
         run: |
@@ -54,19 +62,33 @@ jobs:
             exit 0
           fi
           echo "Merging upstream/main ($(git rev-parse --short upstream/main))..."
-          if ! git merge --no-edit upstream/main; then
+          if git merge --no-edit upstream/main; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Merge stopped on conflict. The overwhelmingly common case is a
+          # purely textual clash in go.mod (upstream bumps a shared dep on a
+          # line adjacent to a fedarisha-added require). Those are safe to
+          # resolve mechanically: take upstream's go.mod and let `go mod tidy`
+          # re-derive the union from the actual import graph — it re-adds every
+          # fed dependency and keeps upstream's version bumps. The `go build`
+          # gate below still guards against a bad result. ANY conflict outside
+          # go.mod/go.sum touches real source and must be resolved by a human,
+          # so we abort loudly in that case.
+          conflicts="$(git diff --name-only --diff-filter=U)"
+          echo "Conflicted paths:"; echo "$conflicts"
+          if echo "$conflicts" | grep -qvE '^(go\.mod|go\.sum)$'; then
             git merge --abort || true
-            echo "::error::Merge of upstream/main hit conflicts — manual sync required."
+            echo "::error::Merge conflicts in source files — manual sync required (see conflicted paths above)."
             exit 1
           fi
+          echo "Only go.mod/go.sum conflicted — auto-resolving via 'go mod tidy'."
+          git show upstream/main:go.mod > go.mod
+          go mod tidy
+          git add go.mod go.sum
+          git commit --no-edit
           echo "changed=true" >> "$GITHUB_OUTPUT"
-
-      - name: Set up Go
-        if: steps.merge.outputs.changed == 'true'
-        uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-          check-latest: true
 
       - name: Build check (do not push a broken main)
         if: steps.merge.outputs.changed == 'true'
