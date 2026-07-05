@@ -54,6 +54,16 @@ func (d *Dialer) Dial(ctx context.Context) (*Conn, error) {
 	ackPath := sessDir + "/" + AckFile
 	var serverPub []byte
 	deadline := time.Now().Add(60 * time.Second)
+	ackPoll := d.PollInterval
+	if ackPoll <= 0 {
+		ackPoll = 100 * time.Millisecond
+	}
+	if ackPoll < 50*time.Millisecond {
+		ackPoll = 50 * time.Millisecond
+	}
+	if ackPoll > 500*time.Millisecond {
+		ackPoll = 500 * time.Millisecond
+	}
 	for time.Now().Before(deadline) {
 		data, err := d.Store.Download(ctx, ackPath)
 		if err == nil && len(data) >= x25519KeySize {
@@ -65,7 +75,7 @@ func (d *Dialer) Dial(ctx context.Context) (*Conn, error) {
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
-		case <-time.After(500 * time.Millisecond):
+		case <-time.After(ackPoll):
 		}
 	}
 	if serverPub == nil {

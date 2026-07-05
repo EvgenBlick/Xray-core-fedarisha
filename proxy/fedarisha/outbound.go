@@ -148,11 +148,11 @@ func yamuxSessionConfig() *yamux.Config {
 	// throughput ≈ window / update-RTT. yamux only emits an update once half the
 	// window is consumed, and v0.1.2 has no RTT auto-tuning, so a small window
 	// throttles hard: 16MB / ~1.5s ≈ 10MB/s, collapsing toward zero as S3
-	// latency climbs under load (this looked like a wedge). 64MB lifts the
-	// ceiling ~4x and keeps the sender from stalling every few files. The
-	// receiver buffers up to this per active stream — on a download that memory
-	// is on the client; on an upload it's on the node.
-	muxCfg.MaxStreamWindowSize = 64 * 1024 * 1024
+	// latency climbs under load (this looked like a wedge). 256MB gives long
+	// downloads enough in-flight room without opening extra cold S3 sessions.
+	// The receiver buffers up to this per active stream — on a download that
+	// memory is on the client; on an upload it's on the node.
+	muxCfg.MaxStreamWindowSize = 256 * 1024 * 1024
 	// Keepalive doubles as a wedge detector. yamux pings every KeepAliveInterval
 	// and waits up to ConnectionWriteTimeout for the pong, which makes a full
 	// round trip through the S3 data path; if the session deadlocks, the pong

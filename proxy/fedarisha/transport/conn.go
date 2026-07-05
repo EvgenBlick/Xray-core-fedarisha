@@ -117,7 +117,7 @@ type ConnConfig struct {
 	WebhookHub    *WebhookHub // optional — enables event-driven polling via S3 webhooks
 }
 
-const uploadWorkers = 32
+const uploadWorkers = 48
 
 // Hedged PUTs. A single slow PUT (gpucloud throttling a connection under load)
 // stalls one file; because the reader consumes strictly in order, a stuck file
@@ -140,9 +140,9 @@ const uploadWorkers = 32
 // it's clearly stuck, past uploadHedgeLarge.
 const (
 	uploadHedgeSmall   = 600 * time.Millisecond
-	uploadHedgeLarge   = 3 * time.Second
+	uploadHedgeLarge   = 6 * time.Second
 	uploadHedgeSizeCut = 256 * 1024 // bytes; files at/above use the large delay
-	uploadTimeout      = 8 * time.Second
+	uploadTimeout      = 20 * time.Second
 	uploadAttempts     = 3
 )
 
@@ -152,12 +152,12 @@ const (
 // per-round work and prefetch-cache memory; maxReadConcurrency bounds the share
 // of the read S3 pool used so it can't starve unrelated work.
 const (
-	maxReadBatch = 64
+	maxReadBatch = 128
 	// Read GETs in flight cap. With List-confirmed fetches there are no wasted
 	// 404s, so this can be generous to keep many multiplexed streams fed under a
 	// parallel download flood without one stream starving the others. Bounded
 	// below the read pool's 96 connections, leaving headroom for List calls.
-	maxReadConcurrency = 48
+	maxReadConcurrency = 64
 )
 
 // holeTimeout bounds how long a missing readSeq file (with later files already
@@ -179,9 +179,9 @@ const holeTimeout = 7 * time.Second
 // Because List already confirmed the file exists, a GET should not 404 — so a
 // retry here only covers genuine transient transport errors.
 const (
-	readHedgeDelay  = 400 * time.Millisecond
-	readGetTimeout  = 1200 * time.Millisecond
-	readGetAttempts = 2
+	readHedgeDelay  = 300 * time.Millisecond
+	readGetTimeout  = 10 * time.Second
+	readGetAttempts = 3
 )
 
 func NewConn(cfg ConnConfig) *Conn {
@@ -221,13 +221,14 @@ func NewConn(cfg ConnConfig) *Conn {
 		lastRecv:      time.Now(),
 		closed:        make(chan struct{}),
 		flushNow:      make(chan struct{}, 1),
-		uploadQueue:   make(chan uploadJob, 64),
+		uploadQueue:   make(chan uploadJob, 128),
 		localAddr:     fedarishaAddr{tag: "fedarisha-local"},
 		remoteAddr:    fedarishaAddr{tag: "fedarisha:" + cfg.SessionID[:8]},
 		prefetchCache: make(map[uint64][]byte),
 		userPrefix:    cfg.UserPrefix,
 		inboundTag:    cfg.InboundTag,
 	}
+	c.lastRecvActive.Store(time.Now().UnixNano())
 	c.readCond = sync.NewCond(&c.readMu)
 
 	// Register with webhook hub if available.
@@ -591,7 +592,14 @@ func (c *Conn) flush() {
 	// shrinking 100ms→25ms only sharpens the latency-sensitive small-write path
 	// (which is exactly what breaks Ookla's upload measurement) without hurting
 	// throughput batching.
-	if size < c.maxFileSize/2 && now.Sub(c.lastFlush) < 25*time.Millisecond {
+	minFlushGap := c.writeInterval
+	if minFlushGap <= 0 {
+		minFlushGap = 25 * time.Millisecond
+	}
+	if minFlushGap > 25*time.Millisecond {
+		minFlushGap = 25 * time.Millisecond
+	}
+	if size < c.maxFileSize/2 && now.Sub(c.lastFlush) < minFlushGap {
 		c.writeMu.Unlock()
 		return
 	}
@@ -671,23 +679,37 @@ func (c *Conn) pollLoop() {
 		// Page loads have bursty patterns — 2-5s gaps between resource groups.
 		sinceActive := time.Since(time.Unix(0, c.lastRecvActive.Load()))
 
-		// Each poll is a List (tens to ~100ms), not a cheap speculative GET. The
-		// floor only applies AFTER an empty poll (a successful fetch loops back
-		// immediately), so it governs the discovery latency of interactive,
-		// ping-pong traffic — an Ookla upload chunk, the request half of an HTTP
-		// round trip — where data arrives between empty polls. 90ms keeps the
-		// floor just above the ~80ms List time so polls don't overlap and flood
-		// the read pool (the old 20ms floor caused a List-storm that starved the
-		// missing-file landing and wedged the session), while shaving ~60ms per
-		// hop off the round trip vs the previous 150ms. Above the floor, back off
-		// the longer we've gone without data.
+		// The active tier must honor PollInterval: clients do not receive VK S3
+		// webhooks, so this is the main knob for latency. fetchNext is synchronous,
+		// so a 20ms delay does not overlap Lists; it only waits less after an empty
+		// List before checking again.
+		activeDelay := c.pollInterval
+		if activeDelay <= 0 {
+			activeDelay = DefaultPollInterval
+		}
+		if activeDelay < 10*time.Millisecond {
+			activeDelay = 10 * time.Millisecond
+		}
+
 		var delay time.Duration
 		if sinceActive < 5*time.Second {
-			delay = 90 * time.Millisecond
+			delay = activeDelay
 		} else if sinceActive < 30*time.Second {
-			delay = 300 * time.Millisecond
+			delay = activeDelay * 5
+			if delay < 100*time.Millisecond {
+				delay = 100 * time.Millisecond
+			}
+			if delay > 300*time.Millisecond {
+				delay = 300 * time.Millisecond
+			}
 		} else {
-			delay = 700 * time.Millisecond
+			delay = activeDelay * 15
+			if delay < 300*time.Millisecond {
+				delay = 300 * time.Millisecond
+			}
+			if delay > 700*time.Millisecond {
+				delay = 700 * time.Millisecond
+			}
 		}
 
 		select {
