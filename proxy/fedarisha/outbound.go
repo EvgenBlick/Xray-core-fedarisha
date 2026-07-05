@@ -160,8 +160,8 @@ func yamuxSessionConfig() *yamux.Config {
 	// Conn.Write is non-blocking (it buffers), so ConnectionWriteTimeout never
 	// gates real writes — it's purely the pong deadline, hence safe to shorten
 	// from minutes to ~45s for a recovery of roughly KeepAliveInterval+timeout.
-	muxCfg.ConnectionWriteTimeout = 30 * time.Second
-	muxCfg.KeepAliveInterval = 10 * time.Second
+	muxCfg.ConnectionWriteTimeout = 90 * time.Second
+	muxCfg.KeepAliveInterval = 20 * time.Second
 	muxCfg.StreamOpenTimeout = 0
 	return muxCfg
 }

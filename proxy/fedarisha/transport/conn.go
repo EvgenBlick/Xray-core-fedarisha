@@ -120,6 +120,14 @@ type ConnConfig struct {
 
 const uploadWorkers = 64
 
+const (
+	// Bulk writes need time to coalesce into multi-megabyte S3 objects. A 5ms
+	// flush interval creates thousands of sub-megabyte objects under a speed
+	// test, which shifts the bottleneck from bandwidth to S3 request latency.
+	// Control frames still bypass this via forceFlush for tiny first writes.
+	bulkFlushDelay = 80 * time.Millisecond
+)
+
 // Hedged PUTs. A single slow PUT (gpucloud throttling a connection under load)
 // stalls one file; because the reader consumes strictly in order, a stuck file
 // at the read frontier blocks the whole stream and trips the hole watchdog into
@@ -158,7 +166,7 @@ const (
 	// 404s, so this can be generous to keep many multiplexed streams fed under a
 	// parallel download flood without one stream starving the others. Bounded
 	// below the read pool, leaving headroom for List/Delete calls.
-	maxReadConcurrency = 96
+	maxReadConcurrency = 128
 )
 
 const (
@@ -189,7 +197,7 @@ func init() {
 // giving ~holeTimeout recovery instead of the keepalive's tens of seconds.
 // Set above the hedged-PUT budget (uploadHedgeDelay × a couple attempts) so a
 // merely-slow file gets overcome by a hedge before the watchdog re-dials.
-const holeTimeout = 7 * time.Second
+const holeTimeout = 30 * time.Second
 
 // Hedged GETs. A healthy GET returns in a few hundred ms; a tail (a transient
 // error pushed the AWS SDK into a multi-second backoff-retry, or a connection
@@ -243,7 +251,7 @@ func NewConn(cfg ConnConfig) *Conn {
 		lastRecv:      time.Now(),
 		closed:        make(chan struct{}),
 		flushNow:      make(chan struct{}, 1),
-		uploadQueue:   make(chan uploadJob, 256),
+		uploadQueue:   make(chan uploadJob, 512),
 		localAddr:     fedarishaAddr{tag: "fedarisha-local"},
 		remoteAddr:    fedarishaAddr{tag: "fedarisha:" + cfg.SessionID[:8]},
 		prefetchCache: make(map[uint64][]byte),
@@ -321,10 +329,7 @@ func (c *Conn) Write(b []byte) (int, error) {
 		// First small write (yamux control frame) — flush after brief coalescing.
 		go func() {
 			time.Sleep(5 * time.Millisecond)
-			select {
-			case c.flushNow <- struct{}{}:
-			default:
-			}
+			c.forceFlush()
 		}()
 	}
 	// For medium/large writes: rely on the ticker + flush() accumulation logic.
@@ -612,22 +617,11 @@ func (c *Conn) flush() {
 	size := c.writeBuf.Len()
 	now := time.Now()
 
-	// If buffer is small and we flushed recently, let data accumulate — but only
-	// briefly. This window is a direct add to tunnel latency: a small interactive
-	// write (an Ookla upload chunk, an HTTP request, a yamux frame) waits here
-	// before it even becomes a c_ file, and the round-trip already costs ~1s of
-	// poll+List+GET on each hop. Bulk transfers are unaffected — they fill past
-	// maxFileSize/2 (or hit maxFileSize → forceFlush) and skip this entirely — so
-	// shrinking 100ms→25ms only sharpens the latency-sensitive small-write path
-	// (which is exactly what breaks Ookla's upload measurement) without hurting
-	// throughput batching.
-	minFlushGap := c.writeInterval
-	if minFlushGap <= 0 {
-		minFlushGap = 25 * time.Millisecond
-	}
-	if minFlushGap > 25*time.Millisecond {
-		minFlushGap = 25 * time.Millisecond
-	}
+	// If buffer is still below half a file, let data accumulate into a larger S3
+	// object. Bulk speed is dominated by per-object PUT/List/GET latency; larger
+	// objects reduce request count per megabyte. Tiny first writes, which are
+	// usually yamux control frames, bypass this through forceFlush in Write().
+	minFlushGap := bulkFlushDelay
 	if size < c.maxFileSize/2 && now.Sub(c.lastFlush) < minFlushGap {
 		c.writeMu.Unlock()
 		return
