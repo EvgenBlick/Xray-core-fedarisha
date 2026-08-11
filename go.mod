@@ -4,10 +4,10 @@ go 1.26
 
 require (
 	github.com/apernet/quic-go v0.59.1-0.20260425001925-6c6cc9bcb716
-	github.com/aws/aws-sdk-go-v2 v1.42.1
-	github.com/aws/aws-sdk-go-v2/credentials v1.19.26
-	github.com/aws/aws-sdk-go-v2/service/s3 v1.104.2
-	github.com/cloudflare/circl v1.6.4
+	github.com/aws/aws-sdk-go-v2 v1.43.5
+	github.com/aws/aws-sdk-go-v2/credentials v1.19.35
+	github.com/aws/aws-sdk-go-v2/service/s3 v1.107.1
+	github.com/cloudflare/circl v1.6.5
 	github.com/ghodss/yaml v1.0.1-0.20220118164431-d8423dcdf344
 	github.com/golang/mock v1.7.0-rc.1
 	github.com/google/go-cmp v0.7.0
@@ -44,15 +44,15 @@ require (
 
 require (
 	github.com/andybalholm/brotli v1.0.6 // indirect
-	github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.7.14 // indirect
-	github.com/aws/aws-sdk-go-v2/internal/configsources v1.4.30 // indirect
-	github.com/aws/aws-sdk-go-v2/internal/endpoints/v2 v2.7.30 // indirect
-	github.com/aws/aws-sdk-go-v2/internal/v4a v1.4.31 // indirect
-	github.com/aws/aws-sdk-go-v2/service/internal/accept-encoding v1.13.13 // indirect
-	github.com/aws/aws-sdk-go-v2/service/internal/checksum v1.9.23 // indirect
-	github.com/aws/aws-sdk-go-v2/service/internal/presigned-url v1.13.30 // indirect
-	github.com/aws/aws-sdk-go-v2/service/internal/s3shared v1.19.31 // indirect
-	github.com/aws/smithy-go v1.27.3 // indirect
+	github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.7.17 // indirect
+	github.com/aws/aws-sdk-go-v2/internal/configsources v1.4.36 // indirect
+	github.com/aws/aws-sdk-go-v2/internal/endpoints/v2 v2.7.36 // indirect
+	github.com/aws/aws-sdk-go-v2/internal/v4a v1.4.37 // indirect
+	github.com/aws/aws-sdk-go-v2/service/internal/accept-encoding v1.13.16 // indirect
+	github.com/aws/aws-sdk-go-v2/service/internal/checksum v1.9.29 // indirect
+	github.com/aws/aws-sdk-go-v2/service/internal/presigned-url v1.13.36 // indirect
+	github.com/aws/aws-sdk-go-v2/service/internal/s3shared v1.19.37 // indirect
+	github.com/aws/smithy-go v1.27.7 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/google/btree v1.1.2 // indirect
 	github.com/juju/ratelimit v1.0.2 // indirect
